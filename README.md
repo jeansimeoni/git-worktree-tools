@@ -111,19 +111,19 @@ gwtree setup
 
 This detects your project type and configures accordingly:
 
-| Project type | What it does |
-| ------------ | ------------ |
+| Project type | What it does                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
 | **Standard** | Copies hook to `.githooks/worktree-links.sh`, creates `.githooks/post-checkout`, sets `core.hooksPath` |
-| **Husky**    | Places script in `.githooks/worktree-links.sh`, adds call to `.husky/post-checkout` |
+| **Husky**    | Places script in `.githooks/worktree-links.sh`, adds call to `.husky/post-checkout`                    |
 
 In both cases, a guarded block is appended to the relevant `post-checkout` hook
 (between `# git-worktree-tools:start` and `# git-worktree-tools:end` markers).
 This block is safe on machines without the full setup installed — it silently
 does nothing if `worktree-links.sh` is absent.
 
-By default, created files appear as untracked in `git status` so you can
-commit them if needed. Pass `--do-not-track` to add them to `.git/info/exclude`
-instead — useful when you do not plan to commit the hook files.
+By default, created files appear as untracked in `git status` so you can commit
+them if needed. Pass `--do-not-track` to add them to `.git/info/exclude` instead
+— useful when you do not plan to commit the hook files.
 
 ### 3. Commit the hook files (optional)
 
@@ -211,8 +211,8 @@ No environment variables or dotfile setup required — it infers everything from
 the conversation files that actually exist.
 
 > **Lazygit note**: Lazygit's built-in worktree removal calls
-> `git worktree remove` directly and bypasses this command. Use
-> `gwtree remove` from the terminal when you want conversation migration.
+> `git worktree remove` directly and bypasses this command. Use `gwtree remove`
+> from the terminal when you want conversation migration.
 
 ## Lazygit
 
@@ -220,39 +220,42 @@ Lazygit has built-in worktree support. Press `w` to open the worktree menu. When
 you create a worktree through Lazygit, it calls `git worktree add` under the
 hood, so the `post-checkout` hook fires and symlinks are created automatically.
 
-To remove a worktree with Claude conversation migration, you need to add a custom
-command that overrides Lazygit's built-in `D` binding on the worktrees panel. Add
-the following to your Lazygit config (`~/.config/lazygit/config.yml`):
+To remove a worktree with Claude conversation migration, you need to add a
+custom command that overrides Lazygit's built-in `D` binding on the worktrees
+panel. Add the following to your Lazygit config
+(`~/.config/lazygit/config.yml`):
 
 ```yaml
 customCommands:
-  - key: 'D'
-    context: 'worktrees'
-    description: 'Remove worktree (migrates Claude conversations)'
+  - key: "D"
+    context: "worktrees"
+    description: "Remove worktree (migrates Claude conversations)"
     command: 'gwtree remove "{{.SelectedWorktree.Path}}"'
     subprocess: true
     prompts:
       - type: confirm
-        title: 'Remove worktree'
+        title: "Remove worktree"
         body: "Remove '{{.SelectedWorktree.Path}}'?"
 ```
 
-This overrides Lazygit's built-in deletion with `gwtree remove`, so conversations
-are migrated before the worktree is deleted. The `subprocess: true` flag keeps the
-terminal visible so you can see the migration output.
+This overrides Lazygit's built-in deletion with `gwtree remove`, so
+conversations are migrated before the worktree is deleted. The
+`subprocess: true` flag keeps the terminal visible so you can see the migration
+output.
 
-If you also want a force-remove binding, add a second entry with a different key:
+If you also want a force-remove binding, add a second entry with a different
+key:
 
 ```yaml
-  - key: '<c-d>'
-    context: 'worktrees'
-    description: 'Force-remove worktree (migrates Claude conversations)'
-    command: 'gwtree remove --force "{{.SelectedWorktree.Path}}"'
-    subprocess: true
-    prompts:
-      - type: confirm
-        title: 'Force-remove worktree'
-        body: "Force-remove '{{.SelectedWorktree.Path}}'?"
+- key: "<c-d>"
+  context: "worktrees"
+  description: "Force-remove worktree (migrates Claude conversations)"
+  command: 'gwtree remove --force "{{.SelectedWorktree.Path}}"'
+  subprocess: true
+  prompts:
+    - type: confirm
+      title: "Force-remove worktree"
+      body: "Force-remove '{{.SelectedWorktree.Path}}'?"
 ```
 
 ## Commands
@@ -260,27 +263,27 @@ If you also want a force-remove binding, add a second entry with a different key
 ### `gwtree setup [--do-not-track]`
 
 Run once per project to configure the auto-symlink hook. Detects Husky
-automatically and integrates without conflicting with existing hooks. Appends
-a guarded block to the relevant `post-checkout` rather than overwriting it.
+automatically and integrates without conflicting with existing hooks. Appends a
+guarded block to the relevant `post-checkout` rather than overwriting it.
 
-By default, created files are left as untracked so they can be committed.
-Pass `--do-not-track` to add them to `.git/info/exclude` and hide them from
+By default, created files are left as untracked so they can be committed. Pass
+`--do-not-track` to add them to `.git/info/exclude` and hide them from
 `git status` when you do not plan to commit the hook files.
 
 ### `gwtree clear-config`
 
-Reverses `gwtree setup`. Strips the guarded block from any hook that
-was modified, removes `.githooks/worktree-links.sh`, removes the
-`.git/info/exclude` entries, and cleans up `.githooks/` and `core.hooksPath`
-if the directory is now empty.
+Reverses `gwtree setup`. Strips the guarded block from any hook that was
+modified, removes `.githooks/worktree-links.sh`, removes the `.git/info/exclude`
+entries, and cleans up `.githooks/` and `core.hooksPath` if the directory is now
+empty.
 
 ### `gwtree remove <path> [--force]`
 
 Drop-in replacement for `git worktree remove`. Before removing the worktree,
 migrates any Claude Code conversation files (`*.jsonl`) from the worktree's
 Claude project directory to the main worktree's project directory. Handles
-multiple Claude accounts automatically by scanning all `~/.claude*` dirs.
-Also cleans up `.git/info/exclude` entries when the last worktree is removed.
+multiple Claude accounts automatically by scanning all `~/.claude*` dirs. Also
+cleans up `.git/info/exclude` entries when the last worktree is removed.
 
 ### `gwtree link`
 
@@ -372,9 +375,9 @@ across all worktrees, add `.claude/` to your `.worktree-links`:
 .claude/
 ```
 
-Each worktree then symlinks `.claude/` from the main worktree, so they all
-share the same instructions and slash commands — but their conversation
-histories remain completely separate.
+Each worktree then symlinks `.claude/` from the main worktree, so they all share
+the same instructions and slash commands — but their conversation histories
+remain completely separate.
 
 ```bash
 git worktree add ../feature-a feature-a
@@ -387,3 +390,10 @@ cd ../feature-a && claude
 cd ../feature-b && claude
 ```
 
+## Acknowledgements
+
+- [Lazygit](https://github.com/jesseduffield/lazygit) — a fantastic terminal UI
+  for git that makes worktree management a pleasure.
+- [Rotz](https://github.com/volllly/rotz) — a cross-platform dotfile manager
+  which is my tool of choice for managing my configuration across Linux and
+  MacOS.

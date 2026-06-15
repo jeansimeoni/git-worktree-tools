@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# Worktree auto-symlink script
+#
+# Automatically symlinks files listed in .worktree-links from the main
+# worktree to newly created worktrees.
+#
+# Can be used as:
+#   1. A standalone post-checkout hook (.githooks/post-checkout)
+#   2. Sourced/called from a Husky post-checkout hook (.husky/post-checkout)
+#
+# Arguments (from git post-checkout):
+#   $1 - previous HEAD
+#   $2 - new HEAD
+#   $3 - checkout type (1=branch, 0=file)
+
+set -euo pipefail
+
+# Only run on branch checkouts, not file checkouts
+checkout_flag="${3:-0}"
+if [[ "$checkout_flag" != "1" ]]; then
+    exit 0
+fi
+
+# Determine if we are in a worktree (not the main working tree)
+git_dir="$(cd "$(git rev-parse --git-dir)" && pwd -P)"
+git_common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+
+# In the main worktree, git-dir and git-common-dir are the same.
+# In a worktree, git-dir is .git/worktrees/<name> while git-common-dir is .git
+if [[ "$git_dir" == "$git_common_dir" ]]; then
+    exit 0
+fi
+
+# We are in a worktree. Find the main worktree path.
+main_worktree="$(dirname "$git_common_dir")"
+current_worktree="$(git rev-parse --show-toplevel)"
+
+# Locate the config file
+config_file="${main_worktree}/.worktree-links"
+if [[ ! -f "$config_file" ]]; then
+    exit 0
+fi
+
+# Log to the worktree's git dir for debugging
+log_file="${git_dir}/worktree-links.log"
+
+log() {
+    echo "[worktree-links] $(date '+%Y-%m-%d %H:%M:%S') $*" >> "$log_file"
+}
+
+log "Setting up symlinks for worktree: ${current_worktree}"
+log "Main worktree: ${main_worktree}"
+
+link_count=0
+skip_count=0
+error_count=0
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+    # Strip inline comments and trim whitespace
+    line="${line%%#*}"
+    line="${line%"${line##*[![:space:]]}"}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" ]] && continue
+
+    source_path="${main_worktree}/${line}"
+    target_path="${current_worktree}/${line}"
+
+    # Check if source exists in the main worktree
+    if [[ ! -e "$source_path" ]]; then
+        log "SKIP (source missing): ${line}"
+        ((skip_count++)) || true
+        continue
+    fi
+
+    # Check if target already exists
+    if [[ -e "$target_path" ]] || [[ -L "$target_path" ]]; then
+        if [[ -L "$target_path" ]]; then
+            # Verify it points to the right place
+            existing_target="$(readlink -f "$target_path" 2>/dev/null || readlink "$target_path")"
+            resolved_source="$(readlink -f "$source_path" 2>/dev/null || (cd "$(dirname "$source_path")" && echo "$(pwd -P)/$(basename "$source_path")"))"
+            if [[ "$existing_target" == "$resolved_source" ]]; then
+                log "SKIP (already linked): ${line}"
+                ((skip_count++)) || true
+                continue
+            fi
+        fi
+        log "SKIP (target exists): ${line}"
+        ((skip_count++)) || true
+        continue
+    fi
+
+    # Ensure parent directory exists
+    target_dir="$(dirname "$target_path")"
+    if [[ ! -d "$target_dir" ]]; then
+        mkdir -p "$target_dir"
+        log "Created directory: ${target_dir}"
+    fi
+
+    # Create the symlink
+    if ln -s "$source_path" "$target_path"; then
+        log "LINKED: ${line} -> ${source_path}"
+        ((link_count++)) || true
+    else
+        log "ERROR: Failed to link ${line}"
+        ((error_count++)) || true
+    fi
+done < "$config_file"
+
+log "Complete: ${link_count} linked, ${skip_count} skipped, ${error_count} errors"
+
+# Print summary to stderr (visible to user) only when work was done
+if [[ $link_count -gt 0 ]]; then
+    echo "[worktree-links] Created ${link_count} symlink(s) from main worktree" >&2
+fi
+if [[ $error_count -gt 0 ]]; then
+    echo "[worktree-links] WARNING: ${error_count} error(s) occurred. See ${log_file}" >&2
+fi

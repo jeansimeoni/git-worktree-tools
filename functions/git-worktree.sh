@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# git-worktree.sh - Git worktree symlink helpers
+#
+# Provides commands for automatic symlinking of untracked files
+# (like .env, .claude/) when creating git worktrees.
+#
+# Requires GIT_WORKTREE_TOOLS_DIR to be set to the root of this repo:
+#   export GIT_WORKTREE_TOOLS_DIR="${HOME}/Projects/jhs/git-worktree-tools"
+#   source "${GIT_WORKTREE_TOOLS_DIR}/functions/git-worktree.sh"
+#
+# Usage:
+#   git-worktree-setup [--do-not-track]  - Configure current repo to use worktree hooks
+#   git-worktree-clear-config            - Remove worktree hooks from the current repo
+#   git-worktree-link                    - Manually run symlink creation in a worktree
+#   git-worktree-remove <path> [--force] - Remove a worktree, migrating Claude conversations
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+# Appends the guarded worktree-tools block to a hook file.
+# The block is safe on machines without the full setup — the 'if [ -f ... ]'
+# check means it silently does nothing when worktree-links.sh is absent.
+_gwt_append_guard() {
+    cat >> "$1" <<'GUARD'
+
+# git-worktree-tools:start
+_wl_main="$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)")"
+if [ -f "$_wl_main/.githooks/worktree-links.sh" ]; then
+    "$_wl_main/.githooks/worktree-links.sh" "$@"
+fi
+# git-worktree-tools:end
+GUARD
+}
+
+# Removes the guarded block from a file. No-op if file or marker is absent.
+_gwt_strip_guard() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    grep -q '^# git-worktree-tools:start$' "$file" || return 0
+    local tmp; tmp="$(mktemp)"
+    sed '/^# git-worktree-tools:start$/,/^# git-worktree-tools:end$/d' \
+        "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+# Writes/replaces the managed block in .git/info/exclude. Idempotent.
+_gwt_exclude_update() {
+    local git_dir="$1"; shift
+    local exclude_file="${git_dir}/info/exclude"
+    mkdir -p "${git_dir}/info"
+    [[ -f "$exclude_file" ]] || touch "$exclude_file"
+    local tmp; tmp="$(mktemp)"
+    sed '/^#git-worktree:start$/,/^#git-worktree:end$/d' \
+        "$exclude_file" > "$tmp" && mv "$tmp" "$exclude_file"
+    {   printf '\n#git-worktree:start\n'
+        for pattern in "$@"; do printf '%s\n' "$pattern"; done
+        printf '#git-worktree:end\n'
+    } >> "$exclude_file"
+    echo "Updated .git/info/exclude with worktree-links entries"
+}
+
+# Removes the managed block from .git/info/exclude. No-op if absent.
+_gwt_exclude_remove() {
+    local git_dir="$1"
+    local exclude_file="${git_dir}/info/exclude"
+    [[ -f "$exclude_file" ]] || return 0
+    grep -q '^#git-worktree:start$' "$exclude_file" || return 0
+    local tmp; tmp="$(mktemp)"
+    sed '/^#git-worktree:start$/,/^#git-worktree:end$/d' \
+        "$exclude_file" > "$tmp" && mv "$tmp" "$exclude_file"
+    echo "Removed worktree-links entries from .git/info/exclude"
+}
+
+# ---------------------------------------------------------------------------
+# Public commands
+# ---------------------------------------------------------------------------
+
+# Setup a project to use the worktree-links hook.
+# Detects Husky and integrates accordingly, otherwise uses .githooks/.
+# Run this once per project after cloning.
+#
+# Options:
+#   --do-not-track   Add created files to .git/info/exclude so they are
+#                    hidden from git status (use when you do NOT plan to
+#                    commit the hook files to the repo)
+git-worktree-setup() {
+    # Parse flags
+    local do_not_track=false
+    for arg in "$@"; do
+        [[ "$arg" == "--do-not-track" ]] && do_not_track=true
+    done
+
+    local repo_root
+    repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+        echo "Error: Not inside a git repository" >&2
+        return 1
+    }
+
+    # Locate hook template — prefers GIT_WORKTREE_TOOLS_DIR, falls back to
+    # the legacy dotfiles location for backward compatibility.
+    local hook_source=""
+    for candidate in \
+        "${GIT_WORKTREE_TOOLS_DIR}/hooks/git-worktree-hook" \
+        "${HOME}/.dotfiles/scripts/git-worktree-hook"; do
+        [[ -f "$candidate" ]] && { hook_source="$candidate"; break; }
+    done
+    if [[ -z "$hook_source" ]]; then
+        echo "Error: Hook template not found. Set GIT_WORKTREE_TOOLS_DIR to the root of the git-worktree-tools repo." >&2
+        return 1
+    fi
+
+    local hooks_dir hook_file
+    local is_husky=false
+
+    # Detect Husky: check for .husky/ directory with a husky bootstrap file
+    if [[ -d "${repo_root}/.husky" ]] && {
+        [[ -f "${repo_root}/.husky/husky.sh" ]] \
+        || [[ -f "${repo_root}/.husky/_/husky.sh" ]] \
+        || [[ -f "${repo_root}/.husky/h" ]]; }; then
+        is_husky=true
+        hooks_dir="${repo_root}/.githooks"
+        hook_file="${repo_root}/.husky/post-checkout"
+        echo "Detected Husky. Integrating into .husky/post-checkout"
+    else
+        hooks_dir="${repo_root}/.githooks"
+        hook_file="${hooks_dir}/post-checkout"
+    fi
+
+    # Track what we create from scratch (for exclude decisions)
+    local created_post_checkout=false
+
+    # --- Install / update .githooks/worktree-links.sh ---
+    mkdir -p "$hooks_dir"
+    if [[ ! -f "${hooks_dir}/worktree-links.sh" ]] \
+       || ! grep -q 'Worktree auto-symlink' "${hooks_dir}/worktree-links.sh" 2>/dev/null; then
+        cp "$hook_source" "${hooks_dir}/worktree-links.sh"
+        chmod +x "${hooks_dir}/worktree-links.sh"
+        echo "Copied worktree-links script to .githooks/worktree-links.sh"
+    else
+        echo ".githooks/worktree-links.sh already up to date"
+    fi
+
+    # --- Integrate guard block into the relevant post-checkout ---
+    if grep -q 'git-worktree-tools:start' "$hook_file" 2>/dev/null; then
+        echo "Worktree-tools already integrated into ${hook_file#"${repo_root}/"}"
+    elif [[ -f "$hook_file" ]]; then
+        # Append to existing hook without overwriting it
+        _gwt_append_guard "$hook_file"
+        echo "Appended worktree-tools block to ${hook_file#"${repo_root}/"}"
+    else
+        # Create a new minimal post-checkout (shebang + guard block only)
+        printf '#!/usr/bin/env bash\n' > "$hook_file"
+        _gwt_append_guard "$hook_file"
+        chmod +x "$hook_file"
+        echo "Created ${hook_file#"${repo_root}/"} with worktree-tools block"
+        created_post_checkout=true
+    fi
+
+    # For non-Husky: ensure core.hooksPath points to .githooks
+    if ! $is_husky; then
+        git config core.hooksPath .githooks
+        echo "Set core.hooksPath to .githooks"
+    fi
+
+    if [[ ! -f "${repo_root}/.worktree-links" ]]; then
+        echo "Note: No .worktree-links file found. Create one listing paths to symlink." >&2
+    fi
+
+    # --- Update .git/info/exclude ---
+    if $do_not_track; then
+        local git_dir
+        git_dir="$(git -C "$repo_root" rev-parse --git-dir)"
+        [[ "$git_dir" != /* ]] && git_dir="${repo_root}/${git_dir}"
+        local -a patterns=(".worktree-links" ".githooks/worktree-links.sh")
+        $created_post_checkout && patterns+=(".githooks/post-checkout")
+        _gwt_exclude_update "$git_dir" "${patterns[@]}"
+    else
+        echo "Skipping .git/info/exclude update (files will appear as untracked — commit them or pass --do-not-track to hide them)"
+    fi
+
+    echo "Worktree symlink hook is now active for this repository."
+}
+
+# Remove all worktree-tools configuration from the current repo.
+# Reverses git-worktree-setup: strips the guard block from any hook that was
+# modified, removes .githooks/worktree-links.sh, removes the exclude block,
+# and cleans up .githooks/ + core.hooksPath when the directory is empty.
+git-worktree-clear-config() {
+    local repo_root
+    repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+        echo "Error: Not inside a git repository" >&2
+        return 1
+    }
+
+    # Strip guard block from Husky post-checkout (if Husky project)
+    _gwt_strip_guard "${repo_root}/.husky/post-checkout"
+
+    # Strip guard block from .githooks/post-checkout; delete file if now empty
+    local std_hook="${repo_root}/.githooks/post-checkout"
+    _gwt_strip_guard "$std_hook"
+    if [[ -f "$std_hook" ]]; then
+        # Delete if only a shebang (or whitespace) remains
+        local content
+        content="$(grep -v '^#!' "$std_hook" | tr -d '[:space:]')"
+        if [[ -z "$content" ]]; then
+            rm "$std_hook"
+            echo "Removed empty .githooks/post-checkout"
+        fi
+    fi
+
+    # Remove the logic script
+    local links_script="${repo_root}/.githooks/worktree-links.sh"
+    if [[ -f "$links_script" ]]; then
+        rm "$links_script"
+        echo "Removed .githooks/worktree-links.sh"
+    fi
+
+    # Clean up .githooks/ directory and core.hooksPath if now empty
+    if [[ -d "${repo_root}/.githooks" ]] \
+       && [[ -z "$(ls -A "${repo_root}/.githooks" 2>/dev/null)" ]]; then
+        rmdir "${repo_root}/.githooks"
+        git config --local --unset core.hooksPath 2>/dev/null \
+            && echo "Unset core.hooksPath" || true
+    fi
+
+    # Remove the managed exclude block
+    local git_dir
+    git_dir="$(git -C "$repo_root" rev-parse --git-dir)"
+    [[ "$git_dir" != /* ]] && git_dir="${repo_root}/${git_dir}"
+    _gwt_exclude_remove "$git_dir"
+
+    echo "Worktree symlink hook removed from this repository."
+}
+
+# Manually run the worktree symlink logic.
+# Use this when you're already in a worktree and want to create/refresh links.
+git-worktree-link() {
+    local git_dir git_common_dir main_worktree
+    git rev-parse --show-toplevel &>/dev/null || {
+        echo "Error: Not inside a git repository" >&2
+        return 1
+    }
+
+    git_dir="$(cd "$(git rev-parse --git-dir)" && pwd -P)"
+    git_common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+
+    if [[ "$git_dir" == "$git_common_dir" ]]; then
+        echo "You are in the main worktree. Nothing to link." >&2
+        return 0
+    fi
+
+    main_worktree="$(dirname "$git_common_dir")"
+
+    # Try these locations in order:
+    # 1. .githooks/worktree-links.sh (always present after setup)
+    # 2. .githooks/post-checkout (legacy single-file setup)
+    # 3. GIT_WORKTREE_TOOLS_DIR hook (direct fallback)
+    # 4. dotfiles legacy location
+    local hook_path=""
+    for candidate in \
+        "${main_worktree}/.githooks/worktree-links.sh" \
+        "${main_worktree}/.githooks/post-checkout" \
+        "${GIT_WORKTREE_TOOLS_DIR}/hooks/git-worktree-hook" \
+        "${HOME}/.dotfiles/scripts/git-worktree-hook"; do
+        if [[ -x "$candidate" ]]; then
+            hook_path="$candidate"
+            break
+        fi
+    done
+
+    if [[ -n "$hook_path" ]]; then
+        "$hook_path" "0000000" "0000000" "1"
+    else
+        echo "Error: No worktree-links hook found" >&2
+        return 1
+    fi
+}
+
+# Remove a git worktree, migrating any Claude Code conversations to the main
+# worktree's project directory first so history is not lost.
+#
+# Usage: git-worktree-remove <worktree-path-or-name> [--force]
+#
+# Works by scanning all ~/.claude*/projects/ directories for conversation files
+# tied to the worktree path — no assumptions about which account (work/personal)
+# or dotfile setup the user has. Conversations stay within the same Claude
+# config dir they were created in, so work and personal history never mix.
+git-worktree-remove() {
+    if [[ $# -eq 0 ]]; then
+        echo "Usage: git-worktree-remove <worktree-path-or-name> [--force]" >&2
+        return 1
+    fi
+
+    local target="$1"
+    shift
+
+    # Resolve the absolute worktree path from git's list
+    local worktree_path
+    worktree_path=$(git worktree list --porcelain \
+        | awk -v t="$target" '
+            /^worktree / { wt = $2 }
+            wt && (wt == t || wt ~ ("/" t "$")) { print wt; exit }
+        ')
+
+    if [[ -z "$worktree_path" ]]; then
+        echo "Error: Could not find worktree matching '${target}'" >&2
+        return 1
+    fi
+
+    # Refuse to operate on the main worktree
+    local main_worktree
+    main_worktree="$(dirname "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)")"
+    if [[ "$worktree_path" == "$main_worktree" ]]; then
+        echo "Error: Cannot remove the main worktree" >&2
+        return 1
+    fi
+
+    # Claude encodes project paths by replacing every '/' with '-'
+    # e.g. /home/user/repo/branch → -home-user-repo-branch
+    local encoded_wt encoded_main
+    encoded_wt="${worktree_path//\//-}"
+    encoded_main="${main_worktree//\//-}"
+
+    # Scan every ~/.claude* directory for conversations tied to this worktree.
+    # This handles multiple accounts (work, personal, etc.) without any
+    # environment variable assumptions — conversations stay within the same
+    # Claude config dir they were created in.
+    local migrated=0
+    local -a claude_dirs=()
+    for d in "${HOME}"/.claude*/; do
+        [[ -d "$d" ]] && claude_dirs+=("${d%/}")
+    done
+
+    for claude_dir in "${claude_dirs[@]}"; do
+        local src_dir="${claude_dir}/projects/${encoded_wt}"
+        local dst_dir="${claude_dir}/projects/${encoded_main}"
+
+        [[ -d "$src_dir" ]] || continue
+
+        local -a jsonl_files=()
+        for f in "${src_dir}"/*.jsonl; do
+            [[ -e "$f" ]] && jsonl_files+=("$f")
+        done
+        [[ ${#jsonl_files[@]} -eq 0 ]] && continue
+
+        mkdir -p "$dst_dir"
+        cp "${jsonl_files[@]}" "$dst_dir/"
+        echo "[claude-migrate] ${claude_dir##*/}: migrated ${#jsonl_files[@]} conversation(s) → ${dst_dir}"
+        (( migrated += ${#jsonl_files[@]} ))
+    done
+
+    if (( migrated == 0 )); then
+        echo "[claude-migrate] No Claude conversations found for this worktree, skipping"
+    fi
+
+    # If this is the last non-main worktree, clean up the exclude block
+    local wt_count
+    wt_count=$(git worktree list --porcelain | grep -c '^worktree ')
+    if (( wt_count <= 2 )); then
+        local git_dir
+        git_dir="$(git rev-parse --git-dir)"
+        [[ "$git_dir" != /* ]] && git_dir="$(git rev-parse --show-toplevel)/${git_dir}"
+        _gwt_exclude_remove "$git_dir"
+    fi
+
+    git worktree remove "$target" "$@"
+}

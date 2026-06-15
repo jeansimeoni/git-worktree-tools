@@ -1,6 +1,6 @@
 # Git Worktrees with Auto-Symlinks
 
-Opinionated scripts for handling my workflows with Git worktrees.
+Opinionated CLI for handling my workflows with Git worktrees.
 
 Git worktrees let you check out multiple branches simultaneously in separate
 directories, all sharing the same `.git` history. This is useful for reviewing
@@ -20,14 +20,13 @@ git clone https://github.com/jeansimeoni/git-worktree-tools \
     "${XDG_DATA_HOME:-$HOME/.local/share}/git-worktree-tools"
 ```
 
-Or anywhere else you prefer — just point `GIT_WORKTREE_TOOLS_DIR` at it.
+Or anywhere else you prefer.
 
-Source the functions in your shell config (bash or zsh):
+Add `bin/` to your PATH in your shell config (bash or zsh):
 
 ```bash
 # ~/.zshrc / ~/.bashrc
-export GIT_WORKTREE_TOOLS_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/git-worktree-tools"
-source "${GIT_WORKTREE_TOOLS_DIR}/functions/git-worktree.sh"
+export PATH="${PATH}:${XDG_DATA_HOME:-${HOME}/.local/share}/git-worktree-tools/bin"
 ```
 
 If you use [Rotz](https://github.com/volllly/rotz) as your dotfile manager, add
@@ -66,23 +65,26 @@ git worktree add ../hotfix -b hotfix/fix-login
 # List worktrees
 git worktree list
 
-# Remove a worktree (with Claude conversation migration)
-git-worktree-remove ../my-feature
-
-# Remove with --force (passes through to git)
-git-worktree-remove ../my-feature --force
-
 # Set up auto-symlinks for a project (run once)
-git-worktree-setup
+gwtree setup
 
 # Set up and add created files to .git/info/exclude (hide from git status)
-git-worktree-setup --do-not-track
+gwtree setup --do-not-track
 
 # Manually trigger symlinks (from inside a worktree)
-git-worktree-link
+gwtree link
+
+# Remove a worktree (with Claude conversation migration)
+gwtree remove ../my-feature
+
+# Remove with --force (passes through to git)
+gwtree remove ../my-feature --force
 
 # Remove worktree hook configuration from a project
-git-worktree-clear-config
+gwtree clear-config
+
+# Pull the latest version from GitHub
+gwtree upgrade
 ```
 
 ## Setting Up a Project
@@ -104,7 +106,7 @@ List the files and directories to symlink, one per line:
 ### 2. Run the setup
 
 ```bash
-git-worktree-setup
+gwtree setup
 ```
 
 This detects your project type and configures accordingly:
@@ -130,7 +132,7 @@ setup without `--do-not-track` so the files appear as untracked and can be
 staged:
 
 ```bash
-git-worktree-setup
+gwtree setup
 
 # Standard project
 git add .githooks/ .worktree-links
@@ -146,7 +148,7 @@ git commit -m "Add worktree auto-symlink support"
 After cloning, team members run one command:
 
 ```bash
-git-worktree-setup
+gwtree setup
 ```
 
 For non-Husky projects this sets `core.hooksPath`. For Husky projects this is
@@ -158,7 +160,7 @@ You can also add it to `package.json` alongside Husky's prepare script:
 ```json
 {
   "scripts": {
-    "prepare": "husky && git-worktree-setup 2>/dev/null || true"
+    "prepare": "husky && gwtree setup 2>/dev/null || true"
   }
 }
 ```
@@ -167,15 +169,15 @@ Or in a `Makefile`:
 
 ```makefile
 setup:
-	git-worktree-setup
+	gwtree setup
 ```
 
 ## Removing the Configuration
 
-To fully reverse `git-worktree-setup` on a project:
+To fully reverse `gwtree setup` on a project:
 
 ```bash
-git-worktree-clear-config
+gwtree clear-config
 ```
 
 This strips the guarded block from any hook that was modified, removes
@@ -186,15 +188,15 @@ cleans up `.githooks/` and `core.hooksPath` if the directory is now empty.
 
 When you delete a worktree, Claude Code conversations tied to it become
 inaccessible (they live under `~/.claude*/projects/<encoded-path>/`). The
-`git-worktree-remove` helper migrates them to the main worktree's project
-directory before deletion so they remain visible in Claude Code's history.
+`gwtree remove` command migrates them to the main worktree's project directory
+before deletion so they remain visible in Claude Code's history.
 
 ```bash
 # Instead of: git worktree remove ../my-feature
-git-worktree-remove ../my-feature
+gwtree remove ../my-feature
 
 # Works with --force too
-git-worktree-remove ../my-feature --force
+gwtree remove ../my-feature --force
 ```
 
 **How it works:**
@@ -209,8 +211,8 @@ No environment variables or dotfile setup required — it infers everything from
 the conversation files that actually exist.
 
 > **Lazygit note**: Lazygit's built-in worktree removal calls
-> `git worktree remove` directly and bypasses this helper. Use
-> `git-worktree-remove` from the terminal when you want conversation migration.
+> `git worktree remove` directly and bypasses this command. Use
+> `gwtree remove` from the terminal when you want conversation migration.
 
 ## Lazygit
 
@@ -218,14 +220,44 @@ Lazygit has built-in worktree support. Press `w` to open the worktree menu. When
 you create a worktree through Lazygit, it calls `git worktree add` under the
 hood, so the `post-checkout` hook fires and symlinks are created automatically.
 
-To remove a worktree with Claude conversation migration from inside Lazygit,
-press `D` (capital) on a worktree in the `w` panel. This runs `git-worktree-remove`
-instead of the built-in removal, so conversations are migrated first. Lazygit
-will ask for confirmation before proceeding.
+To remove a worktree with Claude conversation migration, you need to add a custom
+command that overrides Lazygit's built-in `D` binding on the worktrees panel. Add
+the following to your Lazygit config (`~/.config/lazygit/config.yml`):
 
-## Shell Helpers
+```yaml
+customCommands:
+  - key: 'D'
+    context: 'worktrees'
+    description: 'Remove worktree (migrates Claude conversations)'
+    command: 'gwtree remove "{{.SelectedWorktree.Path}}"'
+    subprocess: true
+    prompts:
+      - type: confirm
+        title: 'Remove worktree'
+        body: "Remove '{{.SelectedWorktree.Path}}'?"
+```
 
-### `git-worktree-setup [--do-not-track]`
+This overrides Lazygit's built-in deletion with `gwtree remove`, so conversations
+are migrated before the worktree is deleted. The `subprocess: true` flag keeps the
+terminal visible so you can see the migration output.
+
+If you also want a force-remove binding, add a second entry with a different key:
+
+```yaml
+  - key: '<c-d>'
+    context: 'worktrees'
+    description: 'Force-remove worktree (migrates Claude conversations)'
+    command: 'gwtree remove --force "{{.SelectedWorktree.Path}}"'
+    subprocess: true
+    prompts:
+      - type: confirm
+        title: 'Force-remove worktree'
+        body: "Force-remove '{{.SelectedWorktree.Path}}'?"
+```
+
+## Commands
+
+### `gwtree setup [--do-not-track]`
 
 Run once per project to configure the auto-symlink hook. Detects Husky
 automatically and integrates without conflicting with existing hooks. Appends
@@ -235,14 +267,14 @@ By default, created files are left as untracked so they can be committed.
 Pass `--do-not-track` to add them to `.git/info/exclude` and hide them from
 `git status` when you do not plan to commit the hook files.
 
-### `git-worktree-clear-config`
+### `gwtree clear-config`
 
-Reverses `git-worktree-setup`. Strips the guarded block from any hook that
+Reverses `gwtree setup`. Strips the guarded block from any hook that
 was modified, removes `.githooks/worktree-links.sh`, removes the
 `.git/info/exclude` entries, and cleans up `.githooks/` and `core.hooksPath`
 if the directory is now empty.
 
-### `git-worktree-remove`
+### `gwtree remove <path> [--force]`
 
 Drop-in replacement for `git worktree remove`. Before removing the worktree,
 migrates any Claude Code conversation files (`*.jsonl`) from the worktree's
@@ -250,13 +282,18 @@ Claude project directory to the main worktree's project directory. Handles
 multiple Claude accounts automatically by scanning all `~/.claude*` dirs.
 Also cleans up `.git/info/exclude` entries when the last worktree is removed.
 
-### `git-worktree-link`
+### `gwtree link`
 
 Manually trigger symlink creation from inside a worktree. Useful if:
 
 - You added new entries to `.worktree-links`
 - The hook didn't fire for some reason
 - You created the worktree before setting up the hook
+
+### `gwtree upgrade`
+
+Pulls the latest version of git-worktree-tools from GitHub using
+`git pull --ff-only`. Run this to get new features and bug fixes.
 
 ## How It Works
 
@@ -298,7 +335,7 @@ cd ../review-pr-42
 npm test
 # When done (migrates Claude conversations before removal):
 cd -
-git-worktree-remove ../review-pr-42
+gwtree remove ../review-pr-42
 ```
 
 ### Work on a hotfix while keeping current work
@@ -308,7 +345,7 @@ git worktree add ../hotfix -b hotfix/urgent-fix main
 cd ../hotfix
 # Fix the issue, commit, push
 cd -
-git-worktree-remove ../hotfix
+gwtree remove ../hotfix
 ```
 
 ### Run two branches side by side
@@ -319,13 +356,34 @@ git worktree add ../branch-b feature-b
 # Both have symlinked .env, node_modules, etc.
 ```
 
-## Files
+### Work on multiple features with isolated Claude sessions
 
-| File | Purpose |
-| ---- | ------- |
-| `hooks/git-worktree-hook` | Hook script copied into projects as `.githooks/worktree-links.sh` |
-| `functions/git-worktree.sh` | Shell helpers (`git-worktree-setup`, `git-worktree-clear-config`, `git-worktree-link`, `git-worktree-remove`) |
-| `.worktree-links` (per project) | List of paths to symlink |
-| `.githooks/worktree-links.sh` (per project) | The active hook script |
-| `.githooks/post-checkout` (per project) | Minimal wrapper — standard projects |
-| `.husky/post-checkout` (per project) | Modified to call the hook — Husky projects |
+Each worktree has a unique path, so Claude Code automatically tracks a separate
+conversation history for each one (stored under
+`~/.claude/projects/<encoded-path>/`). This means you can have Claude helping
+with a feature in one terminal and a bug fix in another with zero context bleed.
+
+To share project-level Claude config (CLAUDE.md, custom commands, settings)
+across all worktrees, add `.claude/` to your `.worktree-links`:
+
+```
+# .worktree-links
+.env
+.claude/
+```
+
+Each worktree then symlinks `.claude/` from the main worktree, so they all
+share the same instructions and slash commands — but their conversation
+histories remain completely separate.
+
+```bash
+git worktree add ../feature-a feature-a
+git worktree add ../feature-b feature-b
+
+# Terminal 1 — Claude works on feature-a with its own context
+cd ../feature-a && claude
+
+# Terminal 2 — Claude works on feature-b with its own context
+cd ../feature-b && claude
+```
+

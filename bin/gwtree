@@ -132,8 +132,6 @@ cmd_setup() {
         hook_file="${hooks_dir}/post-checkout"
     fi
 
-    local created_post_checkout=false
-
     # --- Install / update .githooks/worktree-links.sh ---
     mkdir -p "$hooks_dir"
     if [[ ! -f "${hooks_dir}/worktree-links.sh" ]] \
@@ -156,7 +154,6 @@ cmd_setup() {
         _gwt_append_guard "$hook_file"
         chmod +x "$hook_file"
         echo "Created ${hook_file#"${repo_root}/"} with worktree-tools block"
-        created_post_checkout=true
     fi
 
     # For non-Husky: ensure core.hooksPath points to .githooks
@@ -175,7 +172,10 @@ cmd_setup() {
         git_dir="$(git -C "$repo_root" rev-parse --git-dir)"
         [[ "$git_dir" != /* ]] && git_dir="${repo_root}/${git_dir}"
         local -a patterns=(".worktree-links" ".githooks/worktree-links.sh")
-        $created_post_checkout && patterns+=(".githooks/post-checkout")
+        # Add post-checkout to exclude unless it is already tracked in git
+        if ! git -C "$repo_root" ls-files --error-unmatch .githooks/post-checkout &>/dev/null; then
+            patterns+=(".githooks/post-checkout")
+        fi
         _gwt_exclude_update "$git_dir" "${patterns[@]}"
     else
         echo "Skipping .git/info/exclude update (files will appear as untracked — commit them or pass --do-not-track to hide them)"

@@ -351,16 +351,6 @@ cmd_remove() {
         echo "[claude-migrate] No Claude conversations found for this worktree, skipping"
     fi
 
-    # If this is the last non-main worktree, clean up the exclude block
-    local wt_count
-    wt_count=$(git worktree list --porcelain | grep -c '^worktree ')
-    if (( wt_count <= 2 )); then
-        local git_dir
-        git_dir="$(git rev-parse --git-dir)"
-        [[ "$git_dir" != /* ]] && git_dir="$(git rev-parse --show-toplevel)/${git_dir}"
-        _gwt_exclude_remove "$git_dir"
-    fi
-
     git worktree remove "$target" "$@"
 }
 

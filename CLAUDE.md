@@ -63,8 +63,8 @@ Manually re-runs symlink creation inside a worktree. Falls back through:
 ### `gwtree remove`
 
 Wrapper around `git worktree remove`. Migrates Claude Code conversation files
-before removal. Cleans up the `.git/info/exclude` block when the last
-non-main worktree is removed.
+before removal. Does not touch `.git/info/exclude` — that is managed
+exclusively by `setup` and `clear-config`.
 
 ### `gwtree upgrade`
 

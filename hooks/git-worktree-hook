@@ -52,6 +52,18 @@ log() {
 log "Setting up symlinks for worktree: ${current_worktree}"
 log "Main worktree: ${main_worktree}"
 
+# If path is git-ignored in the main worktree, add it to this worktree's
+# local exclude so the symlink doesn't show up as untracked.
+maybe_exclude() {
+    local path="$1"
+    if git -C "$main_worktree" check-ignore -q "$path" 2>/dev/null; then
+        mkdir -p "${git_dir}/info"
+        grep -qxF "$path" "${git_dir}/info/exclude" 2>/dev/null \
+            || echo "$path" >> "${git_dir}/info/exclude"
+        log "EXCLUDED: ${path} (git-ignored in main worktree)"
+    fi
+}
+
 link_count=0
 skip_count=0
 error_count=0
@@ -81,6 +93,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
             resolved_source="$(readlink -f "$source_path" 2>/dev/null || (cd "$(dirname "$source_path")" && echo "$(pwd -P)/$(basename "$source_path")"))"
             if [[ "$existing_target" == "$resolved_source" ]]; then
                 log "SKIP (already linked): ${line}"
+                maybe_exclude "$line"
                 ((skip_count++)) || true
                 continue
             fi
@@ -100,6 +113,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     # Create the symlink
     if ln -s "$source_path" "$target_path"; then
         log "LINKED: ${line} -> ${source_path}"
+        maybe_exclude "$line"
         ((link_count++)) || true
     else
         log "ERROR: Failed to link ${line}"

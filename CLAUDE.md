@@ -55,10 +55,11 @@ when empty, and removes the `.git/info/exclude` managed block.
 
 ### `gwtree link`
 
-Manually re-runs symlink creation inside a worktree. Falls back through:
-1. `.githooks/worktree-links.sh` (primary — always present after setup)
-2. `.githooks/post-checkout` (legacy single-file setup)
-3. `${GWT_TOOLS_DIR}/hooks/git-worktree-hook` (bundled fallback)
+Manually re-runs symlink creation inside a worktree. Always uses the
+bundled hook so the latest version is guaranteed. Falls back through:
+1. `${GWT_TOOLS_DIR}/hooks/git-worktree-hook` (primary — always latest)
+2. `.githooks/worktree-links.sh` (project copy)
+3. `.githooks/post-checkout` (legacy single-file setup)
 
 ### `gwtree remove`
 

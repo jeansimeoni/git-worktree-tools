@@ -253,15 +253,13 @@ cmd_link() {
 
     main_worktree="$(dirname "$git_common_dir")"
 
-    # Try these locations in order:
-    # 1. .githooks/worktree-links.sh (always present after setup)
-    # 2. .githooks/post-checkout (legacy single-file setup)
-    # 3. The hook bundled with this CLI installation
+    # Prefer the bundled hook so gwtree link always uses the latest version.
+    # Fall back to the project copy only if the bundled hook is missing.
     local hook_path=""
     for candidate in \
+        "${GWT_TOOLS_DIR}/hooks/git-worktree-hook" \
         "${main_worktree}/.githooks/worktree-links.sh" \
-        "${main_worktree}/.githooks/post-checkout" \
-        "${GWT_TOOLS_DIR}/hooks/git-worktree-hook"; do
+        "${main_worktree}/.githooks/post-checkout"; do
         if [[ -x "$candidate" ]]; then
             hook_path="$candidate"
             break

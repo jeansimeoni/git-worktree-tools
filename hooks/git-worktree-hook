@@ -52,15 +52,17 @@ log() {
 log "Setting up symlinks for worktree: ${current_worktree}"
 log "Main worktree: ${main_worktree}"
 
-# If path is git-ignored in the main worktree, add it to this worktree's
-# local exclude so the symlink doesn't show up as untracked.
+# Collect paths that are git-ignored in the main worktree so we can exclude
+# their symlinks from git status. Written as a managed block to
+# $GIT_COMMON_DIR/info/exclude after the symlink pass.
+# (git reads info/exclude from the common dir, not the per-worktree git dir.)
+excluded_paths=()
+
 maybe_exclude() {
     local path="$1"
     if git -C "$main_worktree" check-ignore -q "$path" 2>/dev/null; then
-        mkdir -p "${git_dir}/info"
-        grep -qxF "$path" "${git_dir}/info/exclude" 2>/dev/null \
-            || echo "$path" >> "${git_dir}/info/exclude"
-        log "EXCLUDED: ${path} (git-ignored in main worktree)"
+        excluded_paths+=("$path")
+        log "WILL_EXCLUDE: ${path} (git-ignored in main worktree)"
     fi
 }
 
@@ -122,6 +124,23 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "$config_file"
 
 log "Complete: ${link_count} linked, ${skip_count} skipped, ${error_count} errors"
+
+# Write the symlink exclusions as a managed block in the shared info/exclude.
+# Replaces any previous block so this step is idempotent.
+if [[ ${#excluded_paths[@]} -gt 0 ]]; then
+    exclude_file="${git_common_dir}/info/exclude"
+    mkdir -p "${git_common_dir}/info"
+    [[ -f "$exclude_file" ]] || touch "$exclude_file"
+    tmp_file="$(mktemp)"
+    sed '/^#git-worktree-symlinks:start$/,/^#git-worktree-symlinks:end$/d' \
+        "$exclude_file" > "$tmp_file" && mv "$tmp_file" "$exclude_file"
+    {
+        printf '\n#git-worktree-symlinks:start\n'
+        for p in "${excluded_paths[@]}"; do printf '%s\n' "$p"; done
+        printf '#git-worktree-symlinks:end\n'
+    } >> "$exclude_file"
+    log "Updated ${exclude_file} with ${#excluded_paths[@]} symlink exclusion(s)"
+fi
 
 # Print summary to stderr (visible to user) only when work was done
 if [[ $link_count -gt 0 ]]; then

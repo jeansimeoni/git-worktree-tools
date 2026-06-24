@@ -225,11 +225,19 @@ cmd_clear_config() {
             && echo "Unset core.hooksPath" || true
     fi
 
-    # Remove the managed exclude block
+    # Remove both managed exclude blocks from .git/info/exclude
     local git_dir
     git_dir="$(git -C "$repo_root" rev-parse --git-dir)"
     [[ "$git_dir" != /* ]] && git_dir="${repo_root}/${git_dir}"
     _gwt_exclude_remove "$git_dir"
+
+    local exclude_file="${git_dir}/info/exclude"
+    if [[ -f "$exclude_file" ]] && grep -q '^#git-worktree-symlinks:start$' "$exclude_file"; then
+        local tmp; tmp="$(mktemp)"
+        sed '/^#git-worktree-symlinks:start$/,/^#git-worktree-symlinks:end$/d' \
+            "$exclude_file" > "$tmp" && mv "$tmp" "$exclude_file"
+        echo "Removed symlink exclusions from .git/info/exclude"
+    fi
 
     echo "Worktree symlink hook removed from this repository."
 }

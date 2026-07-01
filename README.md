@@ -7,9 +7,9 @@ directories, all sharing the same `.git` history. This is useful for reviewing
 PRs, running tests on another branch, or working on a hotfix without stashing
 your current work.
 
-The problem: untracked files like `.env`, `.claude/`, or `node_modules/` only
-exist in the main worktree. New worktrees start clean. The helpers in this repo
-solve that by automatically symlinking those files.
+The problem: untracked files like `.env`, `.claude/` and other common local
+configurations only exist in the main worktree. New worktrees start clean. The
+helpers in this repo solve that by automatically symlinking those files.
 
 ## Installation
 
